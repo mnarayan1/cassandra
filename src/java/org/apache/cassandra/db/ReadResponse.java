@@ -33,6 +33,9 @@ import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.cache.DigestCacheKey;
+import org.apache.cassandra.cache.DigestCache;
+import org.apache.cassandra.tracing.Tracing;
 
 import static org.apache.cassandra.db.RepairedDataInfo.NO_OP_REPAIRED_DATA_INFO;
 
@@ -76,7 +79,25 @@ public abstract class ReadResponse
 
     public static ReadResponse createDigestResponse(UnfilteredPartitionIterator data, ReadCommand command)
     {
-        return new DigestResponse(makeDigest(data, command));
+        SinglePartitionReadCommand spCommand = (SinglePartitionReadCommand) command;
+        DigestCacheKey key = new DigestCacheKey(
+            spCommand.partitionKey().getKey(),
+            command.metadata().keyspace,
+            command.metadata().name,
+            command.columnFilter(),
+            command.digestVersion()
+        );
+
+        ByteBuffer digest = DigestCache.get(key);
+        if (digest != null) {
+            Tracing.trace("DigestCache HIT for key: {}", key);
+        } else {
+            Tracing.trace("DigestCache MISS for key: {}", key);
+            digest = makeDigest(data, command);
+            DigestCache.put(key, digest);
+        }
+
+        return new DigestResponse(digest);
     }
 
     public abstract UnfilteredPartitionIterator makeIterator(ReadCommand command);
